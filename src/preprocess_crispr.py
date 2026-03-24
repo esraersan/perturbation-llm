@@ -41,8 +41,7 @@ import logging
 import json
 
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
 )
 log = logging.getLogger(__name__)
 
@@ -59,6 +58,7 @@ log = logging.getLogger(__name__)
 # FDR (false discovery rate) is the statistical significance measure.
 # FDR < 0.05 means less than 5% chance this is a false positive.
 # This is the standard threshold in genomics.
+
 
 def load_mageck_output(filepath):
     """
@@ -88,9 +88,7 @@ def load_mageck_output(filepath):
         "pos|lfc": "pos_lfc",
         "pos|fdr": "pos_fdr",
     }
-    df = df.rename(
-        columns={k: v for k, v in rename_map.items() if k in df.columns}
-    )
+    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
 
     log.info(f"Loaded {len(df)} genes")
     return df
@@ -107,6 +105,7 @@ def load_mageck_output(filepath):
 # Now every screen has mean=0 and std=1.
 # A z-score of -3 means "3 standard deviations below average"
 # regardless of which screen it came from.
+
 
 def normalise_lfc(df, lfc_col="neg_lfc"):
     """
@@ -129,10 +128,7 @@ def normalise_lfc(df, lfc_col="neg_lfc"):
     lfc = df[lfc_col].copy()
     df[f"{lfc_col}_zscore"] = stats.zscore(lfc, nan_policy="omit")
 
-    log.info(
-        f"Normalised {lfc_col}: "
-        f"mean={lfc.mean():.3f}, std={lfc.std():.3f}"
-    )
+    log.info(f"Normalised {lfc_col}: mean={lfc.mean():.3f}, std={lfc.std():.3f}")
     return df
 
 
@@ -155,12 +151,9 @@ def normalise_lfc(df, lfc_col="neg_lfc"):
 #   The cell doesn't care whether this gene is present
 #   under these specific conditions.
 
+
 def classify_fitness_effect(
-    df,
-    lfc_col="neg_lfc",
-    fdr_col="neg_fdr",
-    fdr_threshold=0.05,
-    lfc_threshold=0.5
+    df, lfc_col="neg_lfc", fdr_col="neg_fdr", fdr_threshold=0.05, lfc_threshold=0.5
 ):
     """
     Classify each gene's fitness effect into three categories.
@@ -193,11 +186,7 @@ def classify_fitness_effect(
     ]
     choices = ["essential", "anti_essential"]
 
-    df["fitness_class"] = np.select(
-        conditions,
-        choices,
-        default="neutral"
-    )
+    df["fitness_class"] = np.select(conditions, choices, default="neutral")
 
     counts = df["fitness_class"].value_counts()
     log.info(f"Fitness classification: {counts.to_dict()}")
@@ -211,6 +200,7 @@ def classify_fitness_effect(
 # of which modality the data came from. That's what makes cross-modal
 # reasoning possible — unified representation.
 
+
 def fitness_class_to_text(gene, fitness_class, lfc, cell_line, condition):
     """
     Convert CRISPR fitness classification to natural language.
@@ -222,7 +212,7 @@ def fitness_class_to_text(gene, fitness_class, lfc, cell_line, condition):
     """
     descriptions = {
         "essential": (
-            f"{gene} is essential for survival of {cell_line} cells "
+            f"{gene} is essential for survival of {cell_line} "
             f"under {condition} conditions (LFC: {lfc:.2f}). "
             f"Knockout causes significant cell depletion, indicating "
             f"this gene is required for cell viability or proliferation. "
@@ -230,7 +220,7 @@ def fitness_class_to_text(gene, fitness_class, lfc, cell_line, condition):
             f"such as DNA replication, transcription, or metabolism."
         ),
         "anti_essential": (
-            f"{gene} acts as a fitness suppressor in {cell_line} cells "
+            f"{gene} acts as a fitness suppressor in {cell_line} "
             f"under {condition} conditions (LFC: {lfc:.2f}). "
             f"Knockout causes cell enrichment, meaning cells without "
             f"this gene grow faster. This pattern is consistent with "
@@ -248,8 +238,9 @@ def fitness_class_to_text(gene, fitness_class, lfc, cell_line, condition):
     return descriptions.get(fitness_class, "Fitness effect unknown.")
 
 
-def build_crispr_training_record(row, screen_id, cell_line, condition,
-                                  lfc_col="neg_lfc", fdr_col="neg_fdr"):
+def build_crispr_training_record(
+    row, screen_id, cell_line, condition, lfc_col="neg_lfc", fdr_col="neg_fdr"
+):
     """
     Build one instruction-tuning record from a CRISPR screen gene.
 
@@ -286,9 +277,7 @@ def build_crispr_training_record(row, screen_id, cell_line, condition,
             f"Screen ID: {screen_id}. "
             f"Modality: CRISPR pooled fitness screen."
         ),
-        "output": fitness_class_to_text(
-            gene, fitness_class, lfc, cell_line, condition
-        ),
+        "output": fitness_class_to_text(gene, fitness_class, lfc, cell_line, condition),
         "metadata": {
             "gene": gene,
             "screen_id": screen_id,
@@ -298,11 +287,12 @@ def build_crispr_training_record(row, screen_id, cell_line, condition,
             "fdr": float(fdr),
             "fitness_class": fitness_class,
             "modality": "CRISPR_screen",
-        }
+        },
     }
 
 
 # ── FULL PIPELINE ────────────────────────────────────────────────────────────
+
 
 def run_pipeline(
     input_path,
@@ -311,7 +301,7 @@ def run_pipeline(
     condition,
     output_path,
     fdr_threshold=0.05,
-    lfc_threshold=0.5
+    lfc_threshold=0.5,
 ):
     """
     Full pipeline: MAGeCK output → JSONL training records.
@@ -319,16 +309,12 @@ def run_pipeline(
     df = load_mageck_output(input_path)
     df = normalise_lfc(df)
     df = classify_fitness_effect(
-        df,
-        fdr_threshold=fdr_threshold,
-        lfc_threshold=lfc_threshold
+        df, fdr_threshold=fdr_threshold, lfc_threshold=lfc_threshold
     )
 
     records = []
     for _, row in df.iterrows():
-        record = build_crispr_training_record(
-            row, screen_id, cell_line, condition
-        )
+        record = build_crispr_training_record(row, screen_id, cell_line, condition)
         records.append(record)
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -341,6 +327,7 @@ def run_pipeline(
 
 
 # ── DEMO ─────────────────────────────────────────────────────────────────────
+
 
 def demo():
     """
@@ -374,11 +361,7 @@ def demo():
     neg_fdr[essential_idx] = np.random.uniform(0.001, 0.04, 30)
     neg_fdr[anti_idx] = np.random.uniform(0.001, 0.04, 15)
 
-    df = pd.DataFrame({
-        "gene": genes,
-        "neg_lfc": neg_lfc,
-        "neg_fdr": neg_fdr
-    })
+    df = pd.DataFrame({"gene": genes, "neg_lfc": neg_lfc, "neg_fdr": neg_fdr})
 
     df = normalise_lfc(df)
     df = classify_fitness_effect(df)
@@ -387,10 +370,7 @@ def demo():
     records = []
     for _, row in df.head(5).iterrows():
         record = build_crispr_training_record(
-            row,
-            screen_id="demo_screen",
-            cell_line="K562",
-            condition="standard_growth"
+            row, screen_id="demo_screen", cell_line="K562", condition="standard_growth"
         )
         records.append(record)
 
@@ -414,23 +394,17 @@ def demo():
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="CRISPR screen preprocessing pipeline"
-    )
+    parser = argparse.ArgumentParser(description="CRISPR screen preprocessing pipeline")
     parser.add_argument(
         "--demo",
         action="store_true",
-        help="Run on synthetic data — no real data needed"
+        help="Run on synthetic data — no real data needed",
     )
     parser.add_argument("--input", type=str)
     parser.add_argument("--screen_id", type=str, default="screen_001")
     parser.add_argument("--cell_line", type=str, default="K562")
     parser.add_argument("--condition", type=str, default="standard_growth")
-    parser.add_argument(
-        "--output",
-        type=str,
-        default="output/crispr_records.jsonl"
-    )
+    parser.add_argument("--output", type=str, default="output/crispr_records.jsonl")
     parser.add_argument("--fdr_threshold", type=float, default=0.05)
     parser.add_argument("--lfc_threshold", type=float, default=0.5)
     args = parser.parse_args()

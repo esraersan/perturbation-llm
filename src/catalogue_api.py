@@ -36,8 +36,7 @@ import logging
 import time
 
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
 )
 log = logging.getLogger(__name__)
 
@@ -71,6 +70,7 @@ FDR_SCORE_NAMES = [
 #
 # We add a small sleep between requests so we don't hammer their server.
 # That's just good API citizenship.
+
 
 def query_crispr_screen(dataset_id=None, limit=100, max_records=5000):
     """
@@ -268,6 +268,7 @@ def query_mave(dataset_id=None, limit=100, max_records=5000):
 # A z-score of -2.0 means "2 standard deviations below average"
 # regardless of whether the original score was CS, LFC, or Gamma.
 
+
 def identify_primary_score(score_names_in_dataset):
     """
     Identify which score name is the primary effect score for a dataset.
@@ -293,7 +294,8 @@ def identify_primary_score(score_names_in_dataset):
 
     # Fallback — use most common score name that isn't FDR-like
     non_fdr = [
-        s for s in score_names_in_dataset
+        s
+        for s in score_names_in_dataset
         if not any(fdr in s.lower() for fdr in ["fdr", "q-value", "p-value"])
     ]
     if non_fdr:
@@ -328,23 +330,31 @@ def pivot_gene_records(raw_results):
         effect = r.get("effect", {})
         dataset_meta = r.get("_dataset_meta", {})
 
-        rows.append({
-            "gene": perturbation.get("gene_name", "unknown"),
-            "score_name": effect.get("score_name", "unknown"),
-            "score_value": effect.get("score_value", np.nan),
-            "significant": effect.get("significant", "False") == "True",
-            "significance_criteria": effect.get("significance_criteria", ""),
-            "dataset_id": dataset_meta.get("dataset_id", "unknown"),
-            "cell_line": (dataset_meta.get("dataset_cell_lines", ["unknown"])[0]
-                        if dataset_meta.get("dataset_cell_lines")
-                        else dataset_meta.get("dataset_cell_line_ids", ["unknown"])[0]
-                        if dataset_meta.get("dataset_cell_line_ids")
-                        else "unknown"),
-            "disease": dataset_meta.get("dataset_diseases", ["unknown"])[0]
-                       if dataset_meta.get("dataset_diseases") else "unknown",
-            "perturbation_type": dataset_meta.get("dataset_perturbation_types", ["unknown"])[0]
-                                  if dataset_meta.get("dataset_perturbation_types") else "unknown",
-        })
+        rows.append(
+            {
+                "gene": perturbation.get("gene_name", "unknown"),
+                "score_name": effect.get("score_name", "unknown"),
+                "score_value": effect.get("score_value", np.nan),
+                "significant": effect.get("significant", "False") == "True",
+                "significance_criteria": effect.get("significance_criteria", ""),
+                "dataset_id": dataset_meta.get("dataset_id", "unknown"),
+                "cell_line": (
+                    dataset_meta.get("dataset_cell_lines", ["unknown"])[0]
+                    if dataset_meta.get("dataset_cell_lines")
+                    else dataset_meta.get("dataset_cell_line_ids", ["unknown"])[0]
+                    if dataset_meta.get("dataset_cell_line_ids")
+                    else "unknown"
+                ),
+                "disease": dataset_meta.get("dataset_diseases", ["unknown"])[0]
+                if dataset_meta.get("dataset_diseases")
+                else "unknown",
+                "perturbation_type": dataset_meta.get(
+                    "dataset_perturbation_types", ["unknown"]
+                )[0]
+                if dataset_meta.get("dataset_perturbation_types")
+                else "unknown",
+            }
+        )
 
     df = pd.DataFrame(rows)
 
@@ -355,9 +365,8 @@ def pivot_gene_records(raw_results):
     score_names = df["score_name"].unique().tolist()
     primary_score = identify_primary_score(score_names)
     fdr_score = next(
-        (s for s in score_names
-         if any(f in s.lower() for f in ["fdr", "q-value"])),
-        None
+        (s for s in score_names if any(f in s.lower() for f in ["fdr", "q-value"])),
+        None,
     )
 
     log.info(f"Primary effect score identified: '{primary_score}'")
@@ -367,15 +376,22 @@ def pivot_gene_records(raw_results):
     # Pivot — one row per gene
     # Get effect scores
     effect_df = df[df["score_name"] == primary_score][
-        ["gene", "score_value", "significant", "dataset_id",
-         "cell_line", "disease", "perturbation_type"]
+        [
+            "gene",
+            "score_value",
+            "significant",
+            "dataset_id",
+            "cell_line",
+            "disease",
+            "perturbation_type",
+        ]
     ].rename(columns={"score_value": "effect_score"})
 
     # Get FDR scores if available
     if fdr_score:
-        fdr_df = df[df["score_name"] == fdr_score][
-            ["gene", "score_value"]
-        ].rename(columns={"score_value": "fdr"})
+        fdr_df = df[df["score_name"] == fdr_score][["gene", "score_value"]].rename(
+            columns={"score_value": "fdr"}
+        )
         result = effect_df.merge(fdr_df, on="gene", how="left")
     else:
         result = effect_df.copy()
@@ -422,14 +438,12 @@ def normalise_within_dataset(df, score_col="effect_score"):
     )
 
     log.info(
-        f"Z-score normalised {score_col} within "
-        f"{df['dataset_id'].nunique()} datasets"
+        f"Z-score normalised {score_col} within {df['dataset_id'].nunique()} datasets"
     )
     return df
 
 
-def classify_from_catalogue(df, zscore_col="effect_score_zscore",
-                              zscore_threshold=1.5):
+def classify_from_catalogue(df, zscore_col="effect_score_zscore", zscore_threshold=1.5):
     """
     Classify genes into essential / anti_essential / neutral
     using z-score thresholds and the Catalogue's own significance flags.
@@ -461,18 +475,15 @@ def classify_from_catalogue(df, zscore_col="effect_score_zscore",
     ]
     choices = ["essential", "anti_essential"]
 
-    df["fitness_class"] = np.select(
-        conditions,
-        choices,
-        default="neutral"
-    )
+    df["fitness_class"] = np.select(conditions, choices, default="neutral")
 
     counts = df["fitness_class"].value_counts()
     log.info(f"Classification: {counts.to_dict()}")
     return df
 
-
     # ── CONVERT TO TRAINING RECORDS ───────────────────────────────────────────────
+
+
 #
 # This is the bridge between the Catalogue API and your training pipeline.
 #
@@ -484,6 +495,7 @@ def classify_from_catalogue(df, zscore_col="effect_score_zscore",
 # This is called an adapter pattern in software engineering.
 # The catalogue speaks one language, the training pipeline speaks another.
 # This function translates between them.
+
 
 def catalogue_records_to_training(df, dataset_id, modality="CRISPR_screen"):
     """
@@ -535,7 +547,7 @@ def catalogue_records_to_training(df, dataset_id, modality="CRISPR_screen"):
         record = {
             "instruction": (
                 f"What is the fitness effect of knocking out gene {gene} "
-                f"in {cell_line} cells under {condition}? "
+                f"in {cell_line} under {condition}? "
                 f"Describe the phenotype and its biological interpretation."
             ),
             "input": (
@@ -557,7 +569,7 @@ def catalogue_records_to_training(df, dataset_id, modality="CRISPR_screen"):
                 "fitness_class": fitness_class,
                 "modality": modality,
                 "source": "perturbation_catalogue_api",
-            }
+            },
         }
         records.append(record)
 
@@ -615,11 +627,8 @@ def get_dataset_metadata(dataset_id):
 #
 # One function call goes from API to training-ready JSONL.
 
-def fetch_and_process_crispr(
-    dataset_id,
-    output_path=None,
-    max_records=5000
-):
+
+def fetch_and_process_crispr(dataset_id, output_path=None, max_records=5000):
     """
     Full pipeline: Catalogue API → harmonised training records.
 
@@ -645,10 +654,7 @@ def fetch_and_process_crispr(
     log.info(f"Fetching dataset {dataset_id} from Perturbation Catalogue...")
 
     # Step 1: Query the API
-    raw = query_crispr_screen(
-        dataset_id=dataset_id,
-        max_records=max_records
-    )
+    raw = query_crispr_screen(dataset_id=dataset_id, max_records=max_records)
 
     if not raw:
         log.warning(f"No data returned for {dataset_id}")
@@ -689,6 +695,7 @@ def fetch_and_process_crispr(
 
 # ── DEMO ──────────────────────────────────────────────────────────────────────
 
+
 def demo():
     """
     Fetch real data from the Perturbation Catalogue and process it.
@@ -703,7 +710,7 @@ def demo():
     records, df = fetch_and_process_crispr(
         dataset_id="biogrid_5",
         output_path="output/catalogue_biogrid5_records.jsonl",
-        max_records=200
+        max_records=200,
     )
 
     if not records:
@@ -720,15 +727,15 @@ def demo():
     print(df["fitness_class"].value_counts().to_string())
 
     print(f"\nTop 5 essential genes (strongest depletion):")
-    essential = df[df["fitness_class"] == "essential"].nsmallest(
-        5, "effect_score"
-    )[["gene", "effect_score", "effect_score_zscore", "cell_line"]]
+    essential = df[df["fitness_class"] == "essential"].nsmallest(5, "effect_score")[
+        ["gene", "effect_score", "effect_score_zscore", "cell_line"]
+    ]
     print(essential.to_string(index=False))
 
     print(f"\nTop 5 anti-essential genes (strongest enrichment):")
-    anti = df[df["fitness_class"] == "anti_essential"].nlargest(
-        5, "effect_score"
-    )[["gene", "effect_score", "effect_score_zscore", "cell_line"]]
+    anti = df[df["fitness_class"] == "anti_essential"].nlargest(5, "effect_score")[
+        ["gene", "effect_score", "effect_score_zscore", "cell_line"]
+    ]
     print(anti.to_string(index=False))
 
     print(f"\nExample training record:")
@@ -744,29 +751,15 @@ def demo():
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="Perturbation Catalogue API client"
-    )
+    parser = argparse.ArgumentParser(description="Perturbation Catalogue API client")
     parser.add_argument(
         "--demo",
         action="store_true",
-        help="Fetch real data from biogrid_5 and process it"
+        help="Fetch real data from biogrid_5 and process it",
     )
-    parser.add_argument(
-        "--dataset_id",
-        type=str,
-        help="Catalogue dataset ID to fetch"
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default="output/catalogue_records.jsonl"
-    )
-    parser.add_argument(
-        "--max_records",
-        type=int,
-        default=5000
-    )
+    parser.add_argument("--dataset_id", type=str, help="Catalogue dataset ID to fetch")
+    parser.add_argument("--output", type=str, default="output/catalogue_records.jsonl")
+    parser.add_argument("--max_records", type=int, default=5000)
     args = parser.parse_args()
 
     if args.demo:
@@ -775,7 +768,7 @@ if __name__ == "__main__":
         records, df = fetch_and_process_crispr(
             dataset_id=args.dataset_id,
             output_path=args.output,
-            max_records=args.max_records
+            max_records=args.max_records,
         )
         print(f"Processed {len(records)} training records")
     else:
