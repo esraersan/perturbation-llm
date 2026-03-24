@@ -389,8 +389,6 @@ def demo():
     print(f"\nDataset summary: {counts.to_dict()}")
 
 
-# ── ENTRY POINT ───────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
     import argparse
 
