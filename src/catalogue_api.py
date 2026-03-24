@@ -62,15 +62,6 @@ FDR_SCORE_NAMES = [
 ]
 
 
-# ── API QUERY FUNCTIONS ───────────────────────────────────────────────────────
-#
-# The API returns paginated results — you get `limit` records at a time.
-# To get everything, you keep requesting with increasing offset until
-# you've collected all records. This is called pagination.
-#
-# We add a small sleep between requests so we don't hammer their server.
-# That's just good API citizenship.
-
 
 def query_crispr_screen(dataset_id=None, limit=100, max_records=5000):
     """
@@ -248,25 +239,6 @@ def query_mave(dataset_id=None, limit=100, max_records=5000):
     log.info(f"Retrieved {len(all_results)} raw records")
     return all_results
 
-
-# ── HARMONISATION ─────────────────────────────────────────────────────────────
-#
-# This is where the messy real-world data becomes clean training data.
-#
-# The API gives us one row per (gene, score_type) pair.
-# We need one row per gene with all scores attached.
-#
-# Example of what comes in (two rows for same gene):
-#   {"gene_name": "ARID1A", "score_name": "CRISPR Score", "score_value": -1.08}
-#   {"gene_name": "ARID1A", "score_name": "FDR", "score_value": 0.011}
-#
-# What we want out (one row):
-#   {"gene": "ARID1A", "effect_score": -1.08, "fdr": 0.011, "significant": True}
-#
-# We also normalise the effect score within each dataset using z-scores
-# so that scores from different datasets are on comparable scales.
-# A z-score of -2.0 means "2 standard deviations below average"
-# regardless of whether the original score was CS, LFC, or Gamma.
 
 
 def identify_primary_score(score_names_in_dataset):
@@ -481,22 +453,7 @@ def classify_from_catalogue(df, zscore_col="effect_score_zscore", zscore_thresho
     log.info(f"Classification: {counts.to_dict()}")
     return df
 
-    # ── CONVERT TO TRAINING RECORDS ───────────────────────────────────────────────
-
-
-#
-# This is the bridge between the Catalogue API and your training pipeline.
-#
-# The harmonised DataFrame has one row per gene with a fitness class.
-# This function converts each row into the same instruction-tuning
-# format used by preprocess_crispr.py — so the rest of the pipeline
-# doesn't need to know whether data came from the API or a local file.
-#
-# This is called an adapter pattern in software engineering.
-# The catalogue speaks one language, the training pipeline speaks another.
-# This function translates between them.
-
-
+  
 def catalogue_records_to_training(df, dataset_id, modality="CRISPR_screen"):
     """
     Convert harmonised Catalogue records into training record format.
@@ -693,7 +650,6 @@ def fetch_and_process_crispr(dataset_id, output_path=None, max_records=5000):
     return records, df
 
 
-# ── DEMO ──────────────────────────────────────────────────────────────────────
 
 
 def demo():
@@ -746,7 +702,6 @@ def demo():
     print("=" * 60)
 
 
-# ── ENTRY POINT ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import argparse
