@@ -47,18 +47,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-# ── STEP 1: QUALITY CONTROL ──────────────────────────────────────────────────
-#
-# Before we touch the biology, we need to throw out bad cells.
-# 
-# When you run a scRNA-seq experiment, not everything in your sample
-# is a real healthy cell. Some "cells" are actually:
-#   - Empty droplets that captured ambient RNA floating in solution
-#   - Dying or dead cells that have lost most of their RNA
-#   - Doublets — two cells that got captured together and look like one
-#
-# If you train on data from dying cells, your model learns what dying
-# cells look like, not what perturbations do. That's useless.
+
 #
 # Two filters catch most of the garbage:
 #   1. Minimum genes detected — real cells express hundreds of genes.
@@ -152,18 +141,6 @@ def normalise(adata):
     return adata
 
 
-# ── STEP 3: PSEUDOBULK ───────────────────────────────────────────────────────
-#
-# We have thousands of cells, each with a perturbation label.
-# Instead of training on individual cells (which are noisy), we
-# average all cells with the same perturbation into one profile.
-#
-# This is called pseudobulk — it mimics what bulk RNA-seq would give
-# you if you sequenced a whole population of perturbed cells together.
-#
-# The tradeoff: we lose single-cell resolution but gain a much cleaner
-# signal. For a first prototype this is the right call.
-
 def compute_pseudobulk(adata, perturbation_col, control_label):
     """
     Average expression across all cells sharing the same perturbation.
@@ -216,31 +193,6 @@ def compute_pseudobulk(adata, perturbation_col, control_label):
     log.info(f"Pseudobulk matrix: {df.shape[0]} perturbations x {df.shape[1]} genes")
     return df
 
-# ── STEP 4: PERTURBATION DELTA ───────────────────────────────────────────────
-#
-# This is the core biological signal of the entire project.
-#
-# The question we're answering: "What did this perturbation actually DO?"
-#
-# We can't answer that from absolute expression values alone.
-# A gene showing expression of 5.2 tells us nothing — is that high or low?
-# Normal or abnormal?
-#
-# But if control cells show 7.5 for that same gene, and perturbed cells
-# show 5.2 — now we know something. The perturbation suppressed that gene
-# by 2.3 units. That's a real signal.
-#
-# The delta (perturbed - control) is always a comparison.
-# It answers: relative to a normal cell, what changed?
-#
-# Positive delta = gene got MORE active after knockout
-# Negative delta = gene got LESS active after knockout
-# Near zero = knockout didn't affect this gene
-#
-# Why does knocking OUT a gene make other genes MORE active?
-# Because many genes are repressors — they actively suppress other genes.
-# Remove the repressor and the suppressed gene is free to turn on.
-# This is gene regulation in action.
 
 def compute_deltas(pseudobulk, control_label):
     """
@@ -297,25 +249,7 @@ def compute_deltas(pseudobulk, control_label):
 
     return deltas
 
-# ── STEP 5: CONVERT DELTA TO TRAINING RECORD ─────────────────────────────────
-#
-# This is where biology becomes language.
-#
-# We have a delta vector — 20,000 numbers, one per gene.
-# The LLM needs text tokens.
-#
-# The approach here (Strategy A from the proposal) is the simplest:
-# take the top genes with the largest absolute change, report their
-# direction and magnitude as text.
-#
-# What we lose: the other 19,900 genes, quantitative precision,
-# and coordinated small shifts across whole pathways.
-#
-# What we keep: the strongest signal, in a format the LLM can process.
-#
-# This is a deliberate tradeoff — start simple, establish a baseline,
-# then move to richer representations if the baseline is insufficient.
-# That's good research methodology.
+
 
 def get_top_de_genes(delta_row, n_top=50):
     """
@@ -478,11 +412,7 @@ def build_training_record(gene, cell_type, perturbation_type, delta_row, n_top=5
         }
     }
 
-    # ── STEP 6: FULL PIPELINE ────────────────────────────────────────────────────
-#
-# This chains all the steps above into one callable function.
-# Clean pipelines are important — you should be able to go from
-# raw data to training records in one function call.
+    
 
 def run_pipeline(
     input_path,
@@ -619,7 +549,6 @@ def demo():
     return deltas, example
 
 
-# ── ENTRY POINT ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import argparse
