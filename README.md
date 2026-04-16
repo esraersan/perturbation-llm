@@ -1,9 +1,12 @@
-# Perturbation-Aware LLM — GSoC 2026 Preparation
+# Perturbation-Aware LLM
 
-Preparatory work for EMBL-EBI GSoC Project #9 - Building a perturbation-aware LLM for mMultimodal in-silico perturbation modelling.
+Data ingestion and evaluation pipeline for perturbation biology. Integrates 
+EMBL-EBI Perturbation Catalogue, scRNA-seq, and CRISPR screen data to produce 
+structured LLM training data, with an evaluation framework built around 
+gene-level splits to test genuine generalization.
 
-This is not the finished project. It's what I built to understand
-the core technical challenges before reaching out.
+This is active work in progress. The preprocessing pipelines and evaluation 
+design are complete. Fine-tuning and benchmarking components are ongoing.
 
 ---
 
