@@ -1,6 +1,6 @@
 """
 catalogue_api.py
-=================
+
 Python client for the EMBL-EBI Perturbation Catalogue REST API.
 
 This module handles the gap between raw API responses and clean
@@ -652,6 +652,175 @@ def fetch_and_process_crispr(dataset_id, output_path=None, max_records=5000):
 
 
 
+def fetch_and_process_perturb_seq(
+    dataset_id,
+    output_path=None,
+    max_records=5000
+):
+    """
+    Full pipeline: Perturbation Catalogue DEA API → training records.
+    
+    Queries the perturb-seq DEA endpoint which returns processed
+    differential expression results — no raw count processing needed.
+    
+    Each record represents one perturbed gene and its transcriptional
+    response: which genes went up, which went down, by how much.
+    
+    Parameters
+    ----------
+    dataset_id : str
+        Catalogue dataset ID. e.g. "orion_2025_hct116"
+    output_path : str or None
+        If provided, save records as JSONL to this path.
+    max_records : int
+        Maximum records to retrieve from API.
+    
+    Returns
+    -------
+    tuple of (list of training records, pd.DataFrame)
+    """
+    import json
+    from pathlib import Path
+
+    log.info(f"Fetching perturb-seq DEA data for {dataset_id}...")
+
+    # Step 1: Query DEA endpoint
+    raw = query_perturb_seq(dataset_id=dataset_id, max_records=max_records)
+
+    if not raw:
+        log.warning(f"No data returned for {dataset_id}")
+        return [], pd.DataFrame()
+
+    # Step 2: Fetch dataset metadata
+    metadata = get_dataset_metadata(dataset_id)
+    log.info(f"Dataset metadata: {metadata}")
+
+    # Step 3: Group by perturbed gene and collect affected genes
+    # The API returns one row per (perturbed_gene, affected_gene) pair
+    # We need to group these into one record per perturbed gene
+    perturbation_effects = {}
+    
+    for r in raw:
+        perturbed_gene = r.get("perturbation", {}).get("gene_name", "unknown")
+        effect = r.get("effect", {})
+        
+        if perturbed_gene not in perturbation_effects:
+            perturbation_effects[perturbed_gene] = {
+                "up_genes": [],
+                "down_genes": [],
+                "cell_type": effect.get("cell_type", "unknown"),
+                "n_total": r.get("perturbation", {}).get("n_total", 0),
+                "n_up": r.get("perturbation", {}).get("n_up", 0),
+                "n_down": r.get("perturbation", {}).get("n_down", 0),
+            }
+        
+        # Sort into up and down based on direction
+        direction = effect.get("direction", "")
+        log2fc = effect.get("log2fc", 0.0)
+        affected_gene = effect.get("gene_name", "unknown")
+        padj = effect.get("padj", 1.0)
+        
+        # Only include significant genes
+        if padj < 0.05:
+            if direction == "increased":
+                perturbation_effects[perturbed_gene]["up_genes"].append(
+                    (affected_gene, round(log2fc, 3))
+                )
+            elif direction == "decreased":
+                perturbation_effects[perturbed_gene]["down_genes"].append(
+                    (affected_gene, round(log2fc, 3))
+                )
+
+    log.info(f"Grouped into {len(perturbation_effects)} unique perturbations")
+
+    # Step 4: Build training records
+    records = []
+    rows = []
+
+    cell_line = metadata.get("cell_line", "unknown")
+    disease = metadata.get("disease", "unknown")
+    condition = disease if disease != "unknown" else "standard growth"
+
+    for perturbed_gene, effects in perturbation_effects.items():
+        
+        # Sort by absolute log2fc, take top 10 for display
+        up_genes = sorted(
+            effects["up_genes"], key=lambda x: abs(x[1]), reverse=True
+        )[:10]
+        down_genes = sorted(
+            effects["down_genes"], key=lambda x: abs(x[1]), reverse=True
+        )[:10]
+
+        # Build natural language output
+        up_str = ", ".join(
+            [f"{g} ({fc:+.2f})" for g, fc in up_genes]
+        ) if up_genes else "none detected"
+        
+        down_str = ", ".join(
+            [f"{g} ({fc:+.2f})" for g, fc in down_genes]
+        ) if down_genes else "none detected"
+
+        output_text = (
+            f"Knockout of {perturbed_gene} in {cell_line} causes "
+            f"upregulation of: {up_str}; "
+            f"and downregulation of: {down_str}. "
+            f"Total significantly affected genes: {effects['n_total']} "
+            f"({effects['n_up']} up, {effects['n_down']} down)."
+        )
+
+        record = {
+            "instruction": (
+                f"Predict the transcriptional response to CRISPR knockout "
+                f"of gene {perturbed_gene} in {cell_line} under {condition}. "
+                f"Describe the key upregulated and downregulated genes."
+            ),
+            "input": (
+                f"Gene: {perturbed_gene}. "
+                f"Cell line: {cell_line}. "
+                f"Condition: {condition}. "
+                f"Dataset: {dataset_id}. "
+                f"Modality: scPerturb-seq. "
+                f"Source: EMBL-EBI Perturbation Catalogue."
+            ),
+            "output": output_text,
+            "metadata": {
+                "gene": perturbed_gene,
+                "dataset_id": dataset_id,
+                "cell_line": cell_line,
+                "disease": disease,
+                "top_up_genes": [g for g, _ in up_genes],
+                "top_down_genes": [g for g, _ in down_genes],
+                "n_total": effects["n_total"],
+                "n_up": effects["n_up"],
+                "n_down": effects["n_down"],
+                "modality": "scPerturb-seq",
+                "source": "perturbation_catalogue_api",
+            }
+        }
+        records.append(record)
+        rows.append({
+            "gene": perturbed_gene,
+            "cell_line": cell_line,
+            "n_up": effects["n_up"],
+            "n_down": effects["n_down"],
+            "n_total": effects["n_total"],
+        })
+
+    # Step 5: Save if output path provided
+    if output_path and records:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w") as f:
+            for record in records:
+                f.write(json.dumps(record) + "\n")
+        log.info(f"Saved {len(records)} perturb-seq records to {output_path}")
+
+    df = pd.DataFrame(rows)
+    log.info(f"Built {len(records)} training records from {dataset_id}")
+    return records, df
+
+
+# ── DEMO ──────────────────────────────────────────────────────────────────────
+
 def demo():
     """
     Fetch real data from the Perturbation Catalogue and process it.
@@ -678,9 +847,13 @@ def demo():
     print("Dataset: biogrid_5 (Gilbert/Weissman 2014)")
     print("=" * 60)
 
+    input("\n[Press Enter to see dataset summary...]")
+
     print(f"\nDataset shape: {df.shape}")
     print(f"\nFitness classification:")
     print(df["fitness_class"].value_counts().to_string())
+
+    input("\n[Press Enter to see top essential genes...]")
 
     print(f"\nTop 5 essential genes (strongest depletion):")
     essential = df[df["fitness_class"] == "essential"].nsmallest(5, "effect_score")[
@@ -688,11 +861,15 @@ def demo():
     ]
     print(essential.to_string(index=False))
 
+    input("\n[Press Enter to see top anti-essential genes...]")
+
     print(f"\nTop 5 anti-essential genes (strongest enrichment):")
     anti = df[df["fitness_class"] == "anti_essential"].nlargest(5, "effect_score")[
         ["gene", "effect_score", "effect_score_zscore", "cell_line"]
     ]
     print(anti.to_string(index=False))
+
+    input("\n[Press Enter to see example LLM training record...]")
 
     print(f"\nExample training record:")
     r = records[0]
@@ -702,6 +879,8 @@ def demo():
     print("=" * 60)
 
 
+
+# ── ENTRY POINT ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import argparse
