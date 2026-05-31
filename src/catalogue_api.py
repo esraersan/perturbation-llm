@@ -819,6 +819,189 @@ def fetch_and_process_perturb_seq(
     return records, df
 
 
+
+
+def fetch_and_process_perturb_seq_gsea(
+    dataset_id,
+    gene_names,
+    output_path=None,
+    fdr_threshold=0.05,
+    top_n_pathways=5
+):
+    """
+    Full pipeline: Perturbation Catalogue GSEA API → pathway-level training records.
+    
+    Queries the perturb-seq GSEA endpoint for each perturbed gene and
+    builds pathway-level training records. This is Strategy C from the
+    proposal — pathway summarisation instead of individual gene lists.
+    
+    Unlike DEA, GSEA requires one API call per gene. This function
+    iterates over a list of gene names and aggregates the results.
+    
+    Parameters
+    ----------
+    dataset_id : str
+        Catalogue dataset ID. e.g. "orion_2025_hct116"
+    gene_names : list of str
+        List of perturbed gene names to query.
+    output_path : str or None
+        If provided, save records as JSONL to this path.
+    fdr_threshold : float
+        Maximum FDR to consider a pathway significant. Default 0.05.
+    top_n_pathways : int
+        Maximum pathways to include per direction. Default 5.
+    
+    Returns
+    -------
+    tuple of (list of training records, pd.DataFrame)
+    """
+    import json
+    from pathlib import Path
+
+    log.info(f"Fetching GSEA data for {len(gene_names)} genes in {dataset_id}...")
+
+    # Step 1: Fetch dataset metadata
+    metadata = get_dataset_metadata(dataset_id)
+    cell_line = metadata.get("cell_line", "unknown")
+    disease = metadata.get("disease", "unknown")
+    condition = disease if disease != "unknown" else "standard growth"
+
+    records = []
+    rows = []
+    failed = []
+
+    # Step 2: Query GSEA endpoint once per gene
+    # This endpoint requires both dataset_id and perturbed_gene_name
+    for i, gene in enumerate(gene_names):
+        endpoint = f"{BASE_URL}/v1/perturb-seq-gsea"
+        params = {
+            "dataset_id": dataset_id,
+            "perturbed_gene_name": gene
+        }
+
+        try:
+            response = requests.get(endpoint, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+        except requests.exceptions.RequestException as e:
+            log.warning(f"GSEA query failed for {gene}: {e}")
+            failed.append(gene)
+            continue
+
+        if not data:
+            log.warning(f"No GSEA data for {gene}")
+            continue
+
+        # Step 3: Extract pathway effects from response
+        # Response is a list — take the first item (one perturbed gene)
+        item = data[0] if isinstance(data, list) else data
+        effects = item.get("effects", [])
+
+        if not effects:
+            continue
+
+        # Step 4: Filter by FDR threshold and separate into activated/suppressed
+        activated = []   # NES > 0 — pathway genes upregulated
+        suppressed = []  # NES < 0 — pathway genes downregulated
+
+        for pathway in effects:
+            fdr = pathway.get("fdr", 1.0)
+            nes = pathway.get("nes", 0.0)
+            term = pathway.get("term", "unknown")
+
+            if fdr < fdr_threshold:
+                # Clean up pathway name for readability
+                # HALLMARK_MTORC1_SIGNALING → mTORC1 signaling
+                clean_term = term.replace("HALLMARK_", "").replace("_", " ").title()
+
+                if nes > 0:
+                    activated.append((clean_term, round(nes, 3), fdr))
+                else:
+                    suppressed.append((clean_term, round(nes, 3), fdr))
+
+        # Sort by absolute NES — strongest enrichment first
+        activated = sorted(activated, key=lambda x: abs(x[1]), reverse=True)[:top_n_pathways]
+        suppressed = sorted(suppressed, key=lambda x: abs(x[1]), reverse=True)[:top_n_pathways]
+
+        # Skip genes with no significant pathways
+        if not activated and not suppressed:
+            continue
+
+        # Step 5: Build natural language output
+        act_str = ", ".join(
+            [f"{term} (NES: {nes:+.2f})" for term, nes, _ in activated]
+        ) if activated else "none detected"
+
+        sup_str = ", ".join(
+            [f"{term} (NES: {nes:+.2f})" for term, nes, _ in suppressed]
+        ) if suppressed else "none detected"
+
+        output_text = (
+            f"Knockout of {gene} in {cell_line} activates pathways: {act_str}. "
+            f"Suppressed pathways: {sup_str}."
+        )
+
+        # Step 6: Build training record
+        record = {
+            "instruction": (
+                f"What biological pathways are affected by CRISPR knockout "
+                f"of gene {gene} in {cell_line} under {condition}? "
+                f"Describe the activated and suppressed pathways."
+            ),
+            "input": (
+                f"Gene: {gene}. "
+                f"Cell line: {cell_line}. "
+                f"Condition: {condition}. "
+                f"Dataset: {dataset_id}. "
+                f"Modality: scPerturb-seq GSEA. "
+                f"Source: EMBL-EBI Perturbation Catalogue."
+            ),
+            "output": output_text,
+            "metadata": {
+                "gene": gene,
+                "dataset_id": dataset_id,
+                "cell_line": cell_line,
+                "disease": disease,
+                "activated_pathways": [t for t, _, _ in activated],
+                "suppressed_pathways": [t for t, _, _ in suppressed],
+                "n_activated": len(activated),
+                "n_suppressed": len(suppressed),
+                "modality": "scPerturb-seq_GSEA",
+                "source": "perturbation_catalogue_api",
+            }
+        }
+        records.append(record)
+        rows.append({
+            "gene": gene,
+            "cell_line": cell_line,
+            "n_activated": len(activated),
+            "n_suppressed": len(suppressed),
+        })
+
+        # Progress update every 10 genes
+        if (i + 1) % 10 == 0:
+            log.info(f"Processed {i + 1}/{len(gene_names)} genes")
+
+
+        time.sleep(0.2)
+
+    log.info(f"Built {len(records)} GSEA training records from {dataset_id}")
+    if failed:
+        log.warning(f"Failed to retrieve GSEA data for {len(failed)} genes: {failed[:5]}...")
+
+    # Step 7: Save if output path provided
+    if output_path and records:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w") as f:
+            for record in records:
+                f.write(json.dumps(record) + "\n")
+        log.info(f"Saved {len(records)} GSEA records to {output_path}")
+
+    df = pd.DataFrame(rows) if rows else pd.DataFrame()
+    return records, df
+
+
+
 # ── DEMO ──────────────────────────────────────────────────────────────────────
 
 def demo():
